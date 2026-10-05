@@ -17,11 +17,20 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === "GET") {
+      // json_agg packs each order's items into one list, so one query gives us orders AND what was ordered.
       const rows = await sql`
-        SELECT o.code, o.pickup_time, o.status, o.total, u.name AS buyer
+        SELECT o.code, o.pickup_time, o.status, o.total, u.name AS buyer,
+               COALESCE(
+                 json_agg(json_build_object('name', m.name, 'emoji', m.emoji, 'qty', oi.quantity) ORDER BY oi.id)
+                   FILTER (WHERE oi.id IS NOT NULL),
+                 '[]'::json
+               ) AS items
         FROM orders o
         JOIN users u ON u.id = o.user_id
+        LEFT JOIN order_items oi ON oi.order_id = o.id
+        LEFT JOIN menu_items m ON m.id = oi.menu_item_id
         WHERE NOT o.removed
+        GROUP BY o.id, u.name
         ORDER BY o.created_at DESC, o.id DESC`;
 
       // "Today" means today in the Philippines. Sales = cash actually collected, i.e. CLAIMED orders.
@@ -46,7 +55,7 @@ export default async function handler(req, res) {
         ORDER BY days.d`;
 
       return res.status(200).json({
-        orders: rows.map((r) => ({ id: r.code, buyer: r.buyer, pickup: r.pickup_time, status: r.status, total: Number(r.total) })),
+        orders: rows.map((r) => ({ id: r.code, buyer: r.buyer, pickup: r.pickup_time, status: r.status, total: Number(r.total), items: r.items })),
         stats: { salesToday: Number(s.sales_today), ordersToday: Number(s.orders_today), claimedToday: Number(s.claimed_today) },
         week: week.map((w) => ({ day: w.day, total: Number(w.total) })),
       });

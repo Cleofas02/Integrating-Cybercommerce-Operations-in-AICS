@@ -3,20 +3,32 @@ import MenuManager from "./MenuManager.jsx";
 import { useStore } from "../../store.jsx";
 
 const TABS = ["Overview", "Orders", "Menu items", "Verify ticket"];
+const STRIPE = { Preparing: "border-gold", Ready: "border-ok", Claimed: "border-ink/25" };
+const SLOTS = ["Recess (9:30 AM)", "Lunch (12:00 PM)", "After class (3:30 PM)"];
 const BADGE = { Preparing: "bg-gold text-ink", Ready: "bg-ok text-white", Claimed: "bg-ink/50 text-white" };
 
 function SalesChart({ data }) {
   const max = Math.max(1, ...data.map((d) => d.total)); // at least 1, so a week with no sales doesn't divide by zero
-  const pts = data.map((d, i) => [(i / (data.length - 1)) * 300, 100 - (d.total / max) * 85]);
+  const x = (i) => ((i + 0.5) / data.length) * 320; // lines up with the 7 day labels underneath
+  const y = (v) => 118 - (v / max) * 100;
+  const last = data.length - 1;
+  const line = data.map((d, i) => `${x(i)},${y(d.total)}`).join(" ");
   return (
     <div>
-      <svg viewBox="0 -5 300 115" className="w-full" role="img" aria-label="Sales over the last 7 days">
-        <polyline points={pts.map((p) => p.join(",")).join(" ")} fill="none" stroke="#14346b" strokeWidth="3" strokeLinejoin="round" />
-        {pts.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r="4" fill="#f28c28" />)}
+      <svg viewBox="0 0 320 130" className="w-full" role="img" aria-label="Cash collected over the last 7 days">
+        {[18, 68, 118].map((g) => <line key={g} x1="0" x2="320" y1={g} y2={g} stroke="#16233b" strokeOpacity="0.08" />)}
+        <polygon points={`${x(0)},118 ${line} ${x(last)},118`} fill="#14346b" fillOpacity="0.08" />
+        <polyline points={line} fill="none" stroke="#f28c28" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+        <circle cx={x(last)} cy={y(data[last].total)} r="6" fill="#f28c28" stroke="#fff" strokeWidth="3" />
       </svg>
-      <div className="flex justify-between text-sm text-ink/60">
-        {data.map((d, i) => <span key={i}>{d.day}</span>)}
-      </div>
+      <ul className="grid grid-cols-7 text-center text-sm">
+        {data.map((d, i) => (
+          <li key={i} className={i === last ? "font-bold text-navy" : "text-ink/60"}>
+            <span className="block">{d.day}</span>
+            <span className="block text-xs tabular-nums">₱{Math.round(d.total)}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -71,9 +83,30 @@ export default function Dashboard() {
   }
 
   // The server already leaves out removed orders, so everything here is on the list.
-  const active = orders.filter((o) => o.status !== "Claimed");
+  // Kitchen order: orders still to PREPARE first, then ones already Ready; oldest first inside each group.
+  // (The server sends newest first, so we reverse it, then sort by status. sort() keeps that order within a group.)
+  const rank = (o) => (o.status === "Preparing" ? 0 : 1);
+  const active = orders.filter((o) => o.status !== "Claimed").reverse().sort((a, b) => rank(a) - rank(b));
   const claimed = orders.filter((o) => o.status === "Claimed");
   const list = view === "Active" ? active : claimed;
+
+  // Add up everything in the "Preparing" orders, e.g. 5 x Chicken Adobo Rice, 3 x Iced Tea.
+  const toPrepare = Object.values(
+    orders
+      .filter((o) => o.status === "Preparing")
+      .flatMap((o) => o.items)
+      .reduce((acc, i) => {
+        acc[i.name] = { ...i, qty: (acc[i.name]?.qty || 0) + i.qty };
+        return acc;
+      }, {})
+  );
+
+  const slots = SLOTS.map((full) => ({
+    name: full.split(" (")[0],
+    time: full.match(/\((.*)\)/)[1],
+    preparing: orders.filter((o) => o.pickup === full && o.status === "Preparing").length,
+    ready: orders.filter((o) => o.pickup === full && o.status === "Ready").length,
+  }));
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
@@ -108,15 +141,17 @@ export default function Dashboard() {
   const field = "w-full rounded-xl border border-ink/15 bg-white px-4 py-3";
 
   return (
-    <div className="grid gap-6 md:grid-cols-[200px_1fr]">
-      <nav className="flex gap-2 overflow-x-auto md:flex-col" aria-label="Admin sections">
+    <div className="grid gap-6 md:grid-cols-[210px_1fr]">
+      <nav className="flex gap-2 overflow-x-auto rounded-2xl bg-navy p-2 md:sticky md:top-4 md:flex-col md:self-start md:p-3" aria-label="Admin sections">
         {TABS.map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={"whitespace-nowrap rounded-xl px-4 py-3 text-left font-medium " + (tab === t ? "bg-navy text-white" : "bg-white hover:bg-white/60")}
+            aria-current={tab === t ? "page" : undefined}
+            className={"flex items-center justify-between gap-3 whitespace-nowrap rounded-xl px-4 py-3 text-left font-medium " + (tab === t ? "bg-orange text-white" : "text-white/80 hover:bg-white/10")}
           >
             {t}
+            {t === "Orders" && active.length > 0 && <span className="rounded-full bg-white px-2 text-sm font-bold text-navy">{active.length}</span>}
           </button>
         ))}
       </nav>
@@ -127,23 +162,41 @@ export default function Dashboard() {
         {loadError && <p role="alert" className="mt-2 font-bold text-red-600">{loadError}</p>}
 
         {tab === "Overview" && (
-          <div className="mt-6 space-y-4">
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className={card}><p className="text-ink/60">Sales today</p><p className="font-display text-3xl font-extrabold">₱{stats.salesToday.toFixed(2)}</p></div>
-              <div className={card}><p className="text-ink/60">Orders today</p><p className="font-display text-3xl font-extrabold">{stats.ordersToday}</p></div>
-              <div className={card}><p className="text-ink/60">Claimed today</p><p className="font-display text-3xl font-extrabold text-ok">{stats.claimedToday}</p></div>
-            </div>
-            <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
-              <div className={card}>
-                <h2 className="mb-3 font-display text-xl font-extrabold">Sales, last 7 days</h2>
-                {week.length > 1 && <SalesChart data={week} />}
+          <div className="mt-6 space-y-5">
+            <section className="rounded-3xl bg-navy-deep p-5 text-white md:p-7">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-2xl font-extrabold">Counter board</h2>
+                  <p className="text-white/65">{active.length} {active.length === 1 ? "order is" : "orders are"} waiting at the counter.</p>
+                </div>
+                <button onClick={() => setTab("Orders")} className="rounded-full bg-orange px-5 py-2 font-bold text-white hover:brightness-110">Open orders</button>
               </div>
-              <div className="flex flex-col justify-between rounded-2xl bg-navy p-5 text-white">
-                <h2 className="font-display text-xl font-extrabold">Still to serve</h2>
-                <p className="font-display text-6xl font-extrabold text-gold">{active.length}</p>
-                <p className="text-white/70">orders waiting at the counter</p>
+              <div className="mt-5 grid gap-4 md:grid-cols-3">
+                {slots.map((s) => (
+                  <div key={s.name} className="ticket rounded-2xl bg-paper p-5 text-ink">
+                    <p className="font-display text-xl font-extrabold">{s.name}</p>
+                    <p className="text-ink/60">{s.time}</p>
+                    <div className="mt-5 flex gap-8">
+                      <div><p className="font-display text-5xl font-extrabold leading-none tabular-nums">{s.preparing}</p><p className="mt-1 text-sm text-ink/60">to prepare</p></div>
+                      <div><p className="font-display text-5xl font-extrabold leading-none tabular-nums text-ok">{s.ready}</p><p className="mt-1 text-sm text-ink/60">ready</p></div>
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
+            </section>
+
+            <section className="rounded-2xl bg-white p-5 shadow-sm md:p-6">
+              <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
+                <div>
+                  <h2 className="font-display text-xl font-extrabold">Cash collected today</h2>
+                  <p className="font-display text-4xl font-extrabold text-navy tabular-nums">₱{stats.salesToday.toFixed(2)}</p>
+                </div>
+                <p className="text-ink/70">
+                  <span className="font-bold text-ink">{stats.claimedToday}</span> of <span className="font-bold text-ink">{stats.ordersToday}</span> orders claimed today
+                </p>
+              </div>
+              {week.length > 1 && <SalesChart data={week} />}
+            </section>
           </div>
         )}
 
@@ -160,37 +213,52 @@ export default function Dashboard() {
                 </button>
               ))}
             </div>
-            <div className="overflow-x-auto rounded-2xl bg-white shadow-sm">
-              <table className="w-full">
-                <thead className="border-b border-ink/10"><tr><th className={th}>Order</th><th className={th}>Buyer</th><th className={th}>Total</th><th className={th}>Status</th><th className={th}></th></tr></thead>
-                <tbody className="divide-y divide-ink/10">
-                  {list.length === 0 && (
-                    <tr><td colSpan="5" className={td + " text-center text-ink/60"}>
-                      {view === "Active" ? "No active orders right now." : "No claimed orders to show."}
-                    </td></tr>
-                  )}
-                  {list.map((o) => (
-                    <tr key={o.id}>
-                      <td className={td + " font-bold"}>{o.id}</td>
-                      <td className={td}>{o.buyer}</td>
-                      <td className={td}>₱{o.total.toFixed(2)}</td>
-                      <td className={td}><span className={"rounded-full px-3 py-1 text-sm " + BADGE[o.status]}>{o.status}</span></td>
-                      <td className={td + " text-right"}>
-                        {o.status === "Preparing" && (
-                          <button onClick={() => send("PUT", { code: o.id, status: "Ready" })} className="rounded-full bg-navy px-4 py-1.5 text-sm font-bold text-white">Mark ready</button>
-                        )}
-                        {o.status === "Ready" && (
-                          <button onClick={() => setTab("Verify ticket")} className="rounded-full bg-orange px-4 py-1.5 text-sm font-bold text-white">Verify &amp; claim</button>
-                        )}
-                        {o.status === "Claimed" && (
-                          <button onClick={() => remove(o.id)} className="text-orange underline">Remove</button>
-                        )}
-                      </td>
-                    </tr>
+            {view === "Active" && toPrepare.length > 0 && (
+              <div className="mb-4 rounded-2xl bg-navy p-5 text-white">
+                <h2 className="mb-2 font-display text-lg font-extrabold">To prepare now</h2>
+                <ul className="flex flex-wrap gap-x-6 gap-y-1">
+                  {toPrepare.map((i) => (
+                    <li key={i.name}>{i.emoji} {i.name} <span className="font-bold text-gold">×{i.qty}</span></li>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </ul>
+              </div>
+            )}
+            <ul className="space-y-3">
+              {list.length === 0 && (
+                <li className="rounded-2xl bg-white p-6 text-center text-ink/60 shadow-sm">
+                  {view === "Active" ? "No active orders right now." : "No claimed orders to show."}
+                </li>
+              )}
+              {list.map((o) => (
+                <li key={o.id} className={"flex flex-wrap items-center gap-x-6 gap-y-3 rounded-2xl border-l-8 bg-white p-4 shadow-sm " + STRIPE[o.status]}>
+                  <div className="min-w-28">
+                    <p className="font-display text-xl font-extrabold">{o.id}</p>
+                    <p className="text-sm text-ink/60">Claim: {o.pickup}</p>
+                  </div>
+                  <div className="min-w-48 flex-1">
+                    <ul className="space-y-0.5 font-medium">
+                      {o.items.map((i, k) => <li key={k}>{i.emoji} {i.name} <span className="font-bold text-orange">×{i.qty}</span></li>)}
+                    </ul>
+                    <p className="mt-1 text-sm text-ink/60">{o.buyer}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-display text-xl font-extrabold tabular-nums">₱{o.total.toFixed(2)}</p>
+                    <span className={"rounded-full px-3 py-1 text-sm " + BADGE[o.status]}>{o.status}</span>
+                  </div>
+                  <div className="w-full text-right sm:w-auto">
+                    {o.status === "Preparing" && (
+                      <button onClick={() => send("PUT", { code: o.id, status: "Ready" })} className="rounded-full bg-navy px-5 py-2 font-bold text-white hover:bg-navy-deep">Mark ready</button>
+                    )}
+                    {o.status === "Ready" && (
+                      <button onClick={() => setTab("Verify ticket")} className="rounded-full bg-orange px-5 py-2 font-bold text-white hover:brightness-110">Verify &amp; claim</button>
+                    )}
+                    {o.status === "Claimed" && (
+                      <button onClick={() => remove(o.id)} className="text-orange underline">Remove</button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
