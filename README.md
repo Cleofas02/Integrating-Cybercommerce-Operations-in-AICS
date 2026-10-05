@@ -18,6 +18,17 @@ The **AICS Canteen Cybercommerce Platform** digitizes counter transactions by de
 ## 📸 Product Preview & Interface
 
 | Student Pre-Ordering & Digital Claim Ticket | Canteen Staff Operations & Dual-Key Terminal |
+## Application Screenshots
+
+### Login Page
+![Login Page](public/login-page.png)
+
+### Canteen Ordering Menu
+![Canteen Page](public/canteen-page.png)
+
+### Admin Dashboard Overview
+![Admin Dashboard](public/admin-dashboard.png)
+
 | :---: | :---: |
 | *Live menu catalog, pickup scheduling & tamper-proof claim token* | *Real-time revenue telemetry, fulfillment queue & secure redemption* |
 
